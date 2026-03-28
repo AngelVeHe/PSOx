@@ -1,3 +1,6 @@
+#ifndef PSOX_HPP
+#define PSOX_HPP
+
 #include <cinttypes>
 #include <vector>
 #include <string>
@@ -32,68 +35,36 @@ class PSOx
 
         };
 
-        Swarm swarm_data;
-        vector<double> V_maxes;
-        vector<double> V_mins;
+        struct Result {
+            double best_fitness;
+            vector<double> best_position;
+        };
 
-
-        //Maximo de iteraciones
-        uint64_t max_iter = 500;
-
-        //Dimension del problema
-        uint64_t n;
         
-
-        //Tipo de inercia
-        string inertia_type;
+        Swarm swarm_data;               //Vector de particulas
+        uint64_t max_iter = 500;        //Maximo de iteraciones
+        uint64_t n;                     //Dimension del problema 
+        string inertia_type;            //Tipo de inercia
         double inertia;
         double max_inertia = 0.9;
         double min_inertia = 0.4;
-
-        //Constantes de aceleración
-        double c1, c2;
-        
-        //Global best
+        double c1, c2;                  //Constantes de aceleración           
+        vector<double> X_max_limits;    //Limites del espacio de busqueda
+        vector<double> X_min_limits;
         
 
     public:
         PSOx();
-        PSOx::PSOx(u_int32_t n_particles, uint64_t dim, string inertia_mode, double acc_c1 = 2.1, 
-                    double acc_c2 = 2.1, const vector<double>& X_max, const vector<double>& X_min);
+        PSOx(uint32_t n_particles, uint64_t dim, string inertia_mode, 
+            const vector<double>& X_max, const vector<double>& X_min,
+            double acc_c1 = 2.1, double acc_c2 = 2.1);
         ~PSOx();
         
-
-
+        
         template <typename FitnessFunc>
-        void solve(FitnessFunc& fitness_evaluation) {
-            for (uint64_t t = 0; t < max_iter; ++t) {
-
-                if (inertia_type == "LWID") {
-                    inertia = max_inertia -  ((max_inertia - min_inertia) / max_iter) * t;
-                }
-
-                
-                for (auto& p : swarm_data.particles) {
-                    double current_fitness = fitness_evaluation(p.x);
-
-
-                    //Evaluacion del punto x
-                    if (current_fitness < p.personal_best) {
-                        p.personal_best = current_fitness;
-                        p.best_x = p.x;
-                        
-                        //Actualizacion del global
-                        if (current_fitness < swarm_data.global_best) {
-                            swarm_data.global_best = current_fitness
-                            swarm_data.global_best_x = p.x;
-                        }
-                    }
-
-                    p.v += c1; 
-
-                }
-            }
-        }
+        void solve(FitnessFunc& fitness_evaluation, uint64_t t_max);
+        double get_global_best();
+        Result get_results() const;
 
 };
 
@@ -105,14 +76,16 @@ inline PSOx::~PSOx()
 {};
 
 
-inline PSOx::PSOx(u_int32_t n_particles = 50, uint64_t dim, string inertia_mode,
-                double acc_c1 = 2.1, double acc_c2 = 2.1, 
-                const vector<double>& X_max, const vector<double>& X_min): 
-                n(dim)
+inline PSOx::PSOx(uint32_t n_particles, uint64_t dim, string inertia_mode,
+                const vector<double>& X_max, const vector<double>& X_min,
+                double acc_c1, double acc_c2):
+                n(dim), 
+                X_max_limits(X_max),
+                X_min_limits(X_min)
 {
 
     //Limites de las constantes de aceleracion
-    if (acc_c1 + acc_c2 > 4.1 || (acc_c1 < 0.0 || acc_c2 <= 0)) {
+    if (acc_c1 + acc_c2 > 4.1 || (acc_c1 < 0.0 || acc_c2 < 0)) {
         throw invalid_argument("Invalid acceleration constants. 0 <= (acc_c1 + acc_2) <= 4.1");
     }
      
@@ -134,6 +107,7 @@ inline PSOx::PSOx(u_int32_t n_particles = 50, uint64_t dim, string inertia_mode,
     //Resize el total de particulas al tamaño de particulas y global_mest a INF
     swarm_data.n_particles = n_particles;
     swarm_data.global_best = numeric_limits<double>::max();
+    swarm_data.global_best_x.resize(n);
 
     //Generador de distribución aleatoria uniforme
     random_device rd;
@@ -155,3 +129,72 @@ inline PSOx::PSOx(u_int32_t n_particles = 50, uint64_t dim, string inertia_mode,
     }
 };
 
+
+
+template <typename FitnessFunc>
+void PSOx::solve(FitnessFunc& fitness_evaluation, uint64_t t_max)
+{
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_real_distribution<double> dis(0.0, 1.0);
+
+    for (uint64_t t = 0; t < max_iter; ++t) {
+
+        if (inertia_type == "LDIW") {
+            inertia = max_inertia -  ((max_inertia - min_inertia) / max_iter) * t;
+        }
+
+        
+        for (auto& p : swarm_data.particles) {
+            double current_fitness = fitness_evaluation(p.x);
+
+
+            //Evaluacion del punto x
+            if (current_fitness < p.personal_best) {
+                p.personal_best = current_fitness;
+                p.best_x = p.x;
+                
+                //Actualizacion del global
+                if (current_fitness < swarm_data.global_best) {
+                    swarm_data.global_best = current_fitness;
+                    swarm_data.global_best_x = p.x;
+                }
+            }
+
+            //Calculo velocidad
+            for (uint64_t i = 0; i < n; ++i) {
+                double r1 = dis(gen);
+                double r2 = dis(gen);
+                double px = p.x[i];
+                double pv = p.v[i];
+                double pbx = p.best_x[i];
+                double gbx = swarm_data.global_best_x[i];
+                    
+
+                p.v[i] = inertia * pv + (c1 * r1 * (pbx - px)) + (c2 * r2 * (gbx - px));
+                p.x[i] = px + p.v[i];
+
+                if (p.x[i] < X_min_limits[i]) {
+                    p.x[i] = X_min_limits[i];
+                    p.v[i] *= -0.5; // Rebote y perdida de energia
+                } else if (p.x[i] > X_max_limits[i]) {
+                    p.x[i] = X_max_limits[i];
+                    p.v[i] *= -0.5;
+                }
+            }       
+        }
+    }
+}
+
+
+
+inline double PSOx::get_global_best()
+{
+    return swarm_data.global_best;
+}
+
+inline PSOx::Result PSOx::get_results() const {
+    return { swarm_data.global_best, swarm_data.global_best_x };
+}
+
+#endif
